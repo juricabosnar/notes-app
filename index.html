@@ -122,6 +122,7 @@ body.ro #tools,body.ro #eUndo,body.ro #eRedo{display:none}
  </div>
 </section>
 
+<pre id="dbg" hidden style="position:fixed;right:8px;top:70px;z-index:70;margin:0;padding:8px 10px;background:rgba(0,0,0,.75);color:#7CFC9A;font:12px monospace;border-radius:8px;pointer-events:none"></pre>
 <div id="toast"></div>
 <div id="modal" hidden></div>
 <input type="file" id="fImg" accept="image/*" hidden>
@@ -347,6 +348,8 @@ function dupSel(){if(!sel)return;const cl=sel.objs.map(({arr,o})=>{const c=JSON.
 
 /* ===== pokazivač: olovka, prsti, miš ===== */
 const ptrs=new Map();
+const dbgLog=[];
+function dbg(t){if(!S.debug)return;dbgLog.push(t);if(dbgLog.length>7)dbgLog.shift();const d=$('#dbg');d.hidden=false;d.textContent=dbgLog.join('\n')}
 const loc=e=>[e.clientX-RX,e.clientY-RY];
 const w2=(x,y)=>[(x-V.ox)/V.z,(y-V.oy)/V.z];
 function zoomAt(cx,cy,nz){nz=clamp(nz,.1,8);const wx=(cx-V.ox)/V.z,wy=(cy-V.oy)/V.z;V.z=nz;V.ox=cx-wx*nz;V.oy=cy-wy*nz;redraw()}
@@ -382,13 +385,15 @@ st.addEventListener('pointerdown',e=>{
  if(!cur||e.target.closest('#tools,#selbar,#tbox'))return;
  if(tboxCtx)endText();
  const [x,y]=loc(e),touch=e.pointerType==='touch';
+ dbg('down '+e.pointerType+' btn='+e.buttons+' p='+(e.pressure||0).toFixed(2));
+ if(touch&&g&&g.mode==='draw'&&g.pen)return; /* dlan ne smije prekinuti potez olovkom */
  if(touch){ptrs.set(e.pointerId,{x,y});if(ptrs.size>=2){if(g&&g.mode==='draw')g=null;startPinch();redraw();return}}
  try{st.setPointerCapture(e.pointerId)}catch{}
  if(g){if(e.pointerType==='pen'&&(g.mode==='pan'||g.mode==='pinch'))g=null;else return}
  if(readOnly||(touch&&S.penOnly)||(e.pointerType==='mouse'&&e.button===1)){g={mode:'pan',id:e.pointerId,x,y,ox:V.ox,oy:V.oy,t0:Date.now(),moved:0};return}
  let tool=S.tool;if(e.pointerType==='pen'&&((e.buttons&32)||(e.buttons&2)||e.button===5))tool='eraser';
  const [wx,wy]=w2(x,y);
- if(tool==='pen'||tool==='hl'){if(sel){sel=null}g={mode:'draw',id:e.pointerId,s:{id:uid(),t:tool==='hl'?'hl':'pen',c:S.color,w:tool==='hl'?S.w*3:S.w,p:[]},ax:x,ay:y,drawn:1};addPt(e,true)}
+ if(tool==='pen'||tool==='hl'){if(sel){sel=null}g={mode:'draw',id:e.pointerId,pen:e.pointerType==='pen',s:{id:uid(),t:tool==='hl'?'hl':'pen',c:S.color,w:tool==='hl'?S.w*3:S.w,p:[]},ax:x,ay:y,drawn:1};addPt(e,true)}
  else if(tool==='eraser'){g={mode:'erase',id:e.pointerId,list:[]};eraseAt(wx,wy);redraw()}
  else if(tool==='lasso'){const pad=8/V.z;if(sel&&wx>=sel.bb[0]-pad&&wx<=sel.bb[2]+pad&&wy>=sel.bb[1]-pad&&wy<=sel.bb[3]+pad)g={mode:'move',id:e.pointerId,wx,wy,tx:0,ty:0};else{sel=null;g={mode:'lasso',id:e.pointerId,pts:[[x,y]]};redraw()}}
  else if(tool==='text'){editText(textAt(wx,wy),wx,wy)}
@@ -407,10 +412,11 @@ st.addEventListener('pointermove',e=>{
  else if(g.mode==='move'){const [wx,wy]=w2(x,y),dx=wx-g.wx,dy=wy-g.wy;sel.objs.forEach(({o})=>moveObj(o,dx,dy));sel.bb=[sel.bb[0]+dx,sel.bb[1]+dy,sel.bb[2]+dx,sel.bb[3]+dy];g.tx+=dx;g.ty+=dy;g.wx=wx;g.wy=wy;redraw()}
 });
 function endPtr(e,cancel){
+ dbg((cancel?'CANCEL ':'up ')+e.pointerType);
  if(e.pointerType==='touch'){ptrs.delete(e.pointerId);if(g&&g.mode==='pinch'&&ptrs.size<2){g=null;return}}
  if(!g||g.id!==e.pointerId)return;
  const m=g;g=null;clearTimeout(m.tm);
- if(m.mode==='draw'){if(!cancel&&m.s.p.length>=3)act(addOp('strokes',m.s));else redraw()}
+ if(m.mode==='draw'){if((!cancel||m.pen)&&m.s.p.length>=3)act(addOp('strokes',m.s));else redraw()}
  else if(m.mode==='erase'){if(m.list.length)act(delOp(m.list),true);else redraw()}
  else if(m.mode==='lasso'){const poly=m.pts.map(([x,y])=>w2(x,y));const objs=[];
   if(!cancel&&poly.length>2){for(const s of cur.strokes){const p=s.p,n=p.length/3;let k=0;for(let i=0;i<n;i++)if(pip(p[i*3],p[i*3+1],poly))k++;if(n&&k/n>=.5)objs.push({arr:'strokes',o:s})}
@@ -584,6 +590,7 @@ function settings(){menu('Postavke',[
  {t:'Prst pomiče, olovka piše: '+(S.penOnly?'DA':'NE'),f:()=>{S.penOnly=!S.penOnly;saveS();settings()}},
  {t:'Pravilni oblici (snap): '+(S.snap?'DA':'NE'),f:()=>{S.snap=!S.snap;saveS();settings()}},
  {t:'Claude API ključ za AI i rukopis: '+(S.apiKey?'postavljen':'nije postavljen'),f:async()=>{const v=await askText('Claude API ključ (sprema se samo na ovaj uređaj)',S.apiKey,'password','sk-ant-...');if(v!=null){S.apiKey=v.trim();saveS()}}},
+ {t:'Dijagnostika olovke (log događaja): '+(S.debug?'UKLJUČENA':'isključena'),f:()=>{S.debug=!S.debug;saveS();if(!S.debug)$('#dbg').hidden=true;settings()}},
  {t:'Pripremi offline (OCR hrvatski, PDF)',f:prefetchOffline},
  {t:'Uvezi bilješku (.json)',f:()=>$('#fJson').click()},
  {t:'Izvezi sve bilješke (.json)',f:()=>shareFile(new Blob([JSON.stringify(notes.filter(n=>!n.deleted&&!n.lock))],{type:'application/json'}),'biljeske-backup.json','application/json')}])}

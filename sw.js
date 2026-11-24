@@ -1,5 +1,5 @@
 // Service worker: aplikacija radi offline. Ažuriranja se primijene pri sljedećem otvaranju.
-const V = 'biljeske-v1';
+const V = 'biljeske-v2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 const CDN = ['cdn.jsdelivr.net', 'cdnjs.cloudflare.com', 'www.gstatic.com', 'tessdata.projectnaptha.com', 'unpkg.com'];
 
