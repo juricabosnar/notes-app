@@ -254,7 +254,7 @@ function saveCopy(){const n=norm(JSON.parse(JSON.stringify(cur)));n.id=uid();n.l
 /* ===== editor: stanje ===== */
 let cur=null,readOnly=false;const V={ox:60,oy:60,z:1};
 let hist=[],redoS=[],sel=null,g=null,editing=null,tboxCtx=null,pdfNew=false,imgMode='insert',recorder=null;
-const st=$('#stage'),cv=$('#cv'),ctx=cv.getContext('2d'),cv2=$('#cv2'),c2=cv2.getContext('2d',{desynchronized:true});
+const st=$('#stage'),cv=$('#cv'),ctx=cv.getContext('2d'),cv2=$('#cv2'),c2=cv2.getContext('2d',{desynchronized:!!S.fast});
 let dpr=1,W=0,H=0,RX=0,RY=0;
 const PAL=['k','#1e66f5','#e53935','#2e9e44','#f08c00','#8e44ad','#ffd400','#ec407a'],WS=[2,4,8,14];
 const mctx=document.createElement('canvas').getContext('2d');
@@ -347,7 +347,7 @@ function moveObj(o,dx,dy){if(o.p){for(let i=0;i<o.p.length;i+=3){o.p[i]+=dx;o.p[
 function dupSel(){if(!sel)return;const cl=sel.objs.map(({arr,o})=>{const c=JSON.parse(JSON.stringify(o));c.id=uid();moveObj(c,24,24);return{arr,o:c}});act(addManyOp(cl),false,true);sel={objs:cl,bb:unionBB(cl)};redraw()}
 
 /* ===== pokazivač: olovka, prsti, miš ===== */
-const ptrs=new Map();
+const ptrs=new Map();let lastPen=0;const VER='v4';
 const dbgLog=[];
 function dbg(t){if(!S.debug)return;dbgLog.push(t);if(dbgLog.length>7)dbgLog.shift();const d=$('#dbg');d.hidden=false;d.textContent=dbgLog.join('\n')}
 const loc=e=>[e.clientX-RX,e.clientY-RY];
@@ -385,6 +385,8 @@ st.addEventListener('pointerdown',e=>{
  if(!cur||e.target.closest('#tools,#selbar,#tbox'))return;
  if(tboxCtx)endText();
  const [x,y]=loc(e),touch=e.pointerType==='touch';
+ if(e.pointerType==='pen')lastPen=Date.now();
+ if(touch&&S.penOnly&&Date.now()-lastPen<1500)return; /* dlan blizu olovke se ignorira */
  dbg('down '+e.pointerType+' btn='+e.buttons+' p='+(e.pressure||0).toFixed(2));
  if(touch&&g&&g.mode==='draw'&&g.pen)return; /* dlan ne smije prekinuti potez olovkom */
  if(touch){ptrs.set(e.pointerId,{x,y});if(ptrs.size>=2){if(g&&g.mode==='draw')g=null;startPinch();redraw();return}}
@@ -399,6 +401,7 @@ st.addEventListener('pointerdown',e=>{
  else if(tool==='text'){editText(textAt(wx,wy),wx,wy)}
 });
 st.addEventListener('pointermove',e=>{
+ if(e.pointerType==='pen')lastPen=Date.now();
  if(e.pointerType==='touch'&&ptrs.has(e.pointerId)){const [x,y]=loc(e);ptrs.set(e.pointerId,{x,y})}
  if(!g)return;
  if(g.mode==='pinch'){if(ptrs.size<2)return;const [p,q]=[...ptrs.values()],cx=(p.x+q.x)/2,cy=(p.y+q.y)/2;V.z=clamp(g.z0*Math.hypot(p.x-q.x,p.y-q.y)/g.d0,.1,8);V.ox=cx-g.wx*V.z;V.oy=cy-g.wy*V.z;redraw();return}
@@ -416,7 +419,7 @@ function endPtr(e,cancel){
  if(e.pointerType==='touch'){ptrs.delete(e.pointerId);if(g&&g.mode==='pinch'&&ptrs.size<2){g=null;return}}
  if(!g||g.id!==e.pointerId)return;
  const m=g;g=null;clearTimeout(m.tm);
- if(m.mode==='draw'){if((!cancel||m.pen)&&m.s.p.length>=3)act(addOp('strokes',m.s));else redraw()}
+ if(m.mode==='draw'){dbg('stroke pts='+m.s.p.length/3);if((!cancel||m.pen)&&m.s.p.length>=3)act(addOp('strokes',m.s));else redraw()}
  else if(m.mode==='erase'){if(m.list.length)act(delOp(m.list),true);else redraw()}
  else if(m.mode==='lasso'){const poly=m.pts.map(([x,y])=>w2(x,y));const objs=[];
   if(!cancel&&poly.length>2){for(const s of cur.strokes){const p=s.p,n=p.length/3;let k=0;for(let i=0;i<n;i++)if(pip(p[i*3],p[i*3+1],poly))k++;if(n&&k/n>=.5)objs.push({arr:'strokes',o:s})}
@@ -531,7 +534,9 @@ async function openNote(n,ro=false){
  cur=n;readOnly=ro;hist=[];redoS=[];sel=null;g=null;imgC.clear();Object.assign(V,n.view||{ox:60,oy:60,z:1});
  document.body.dataset.view='editor';document.body.classList.toggle('ro',ro);
  $('#eTitle').value=n.title;$('#eTitle').readOnly=ro;history.pushState({e:1},'');
- resize();updTools()}
+
+ resize();updTools();ensureVisible()}
+function ensureVisible(){const b=contentBox(cur);if(!b)return;const bad=!isFinite(V.ox+V.oy+V.z)||V.z<.1||V.z>8;const vx0=-V.ox/V.z,vy0=-V.oy/V.z,vx1=(W-V.ox)/V.z,vy1=(H-V.oy)/V.z;if(bad||b[2]<vx0||b[0]>vx1||b[3]<vy0||b[1]>vy1)fit()}
 async function closeEditor(){
  if(!cur)return;endText();if(recorder)recorder.stop();clearTimeout(g&&g.tm);g=null;const n=cur;
  if(!readOnly){try{const b=contentBox(n);n.thumb=(!n.lock&&b)?(await rasterize(n,b,320,10,1)).toDataURL('image/jpeg',.6):'';}catch{}await saveNow()}
@@ -585,12 +590,13 @@ $('#bSync').onclick=async()=>{
 
 /* ===== postavke ===== */
 async function prefetchOffline(){toast('Pripremam offline…',60000);try{await Promise.all([loadScript(PDFJS),loadScript(JSPDF),loadScript(TESS)]);await fetch(PDFW);const c=document.createElement('canvas');c.width=240;c.height=70;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,240,70);x.fillStyle='#000';x.font='34px sans-serif';x.fillText('Čšž test',10,48);await tessText(c);toast('Spremno za offline ✓')}catch(e){toast('Greška: '+e.message,5000)}}
-function settings(){menu('Postavke',[
+function settings(){menu('Postavke · '+VER,[
  {t:'Tema: '+({auto:'automatski',light:'svijetla',dark:'tamna'}[S.theme]),f:()=>{cycleTheme();settings()}},
  {t:'Prst pomiče, olovka piše: '+(S.penOnly?'DA':'NE'),f:()=>{S.penOnly=!S.penOnly;saveS();settings()}},
  {t:'Pravilni oblici (snap): '+(S.snap?'DA':'NE'),f:()=>{S.snap=!S.snap;saveS();settings()}},
  {t:'Claude API ključ za AI i rukopis: '+(S.apiKey?'postavljen':'nije postavljen'),f:async()=>{const v=await askText('Claude API ključ (sprema se samo na ovaj uređaj)',S.apiKey,'password','sk-ant-...');if(v!=null){S.apiKey=v.trim();saveS()}}},
  {t:'Dijagnostika olovke (log događaja): '+(S.debug?'UKLJUČENA':'isključena'),f:()=>{S.debug=!S.debug;saveS();if(!S.debug)$('#dbg').hidden=true;settings()}},
+ {t:'Brzi prikaz olovke (manja latencija, može pokvariti prikaz): '+(S.fast?'DA':'NE')+' – primjenjuje se nakon ponovnog pokretanja',f:()=>{S.fast=!S.fast;saveS();settings()}},
  {t:'Pripremi offline (OCR hrvatski, PDF)',f:prefetchOffline},
  {t:'Uvezi bilješku (.json)',f:()=>$('#fJson').click()},
  {t:'Izvezi sve bilješke (.json)',f:()=>shareFile(new Blob([JSON.stringify(notes.filter(n=>!n.deleted&&!n.lock))],{type:'application/json'}),'biljeske-backup.json','application/json')}])}
